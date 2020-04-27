@@ -1,0 +1,185 @@
+// ----------------------------------------------------------------------------
+// Copyright 2020 ARM Ltd.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ----------------------------------------------------------------------------
+
+// Schema for encapsulating the telemetry associated with a Smart Plug.
+
+//-----------------------------------------------------------------------------
+// *NOTE*: Design notes that will NOT be in the final file revision:
+
+// This is still a WORK-IN-PROGRESS. The features of the MbedOS device drivers
+// supplying the data for individual fields may well require design tweaks to
+// the schema, and to avoid polluting the longer term (released) name- and
+// numberspaces with deprecated values from this early-stage process we will
+// deliberately break our future-proofing comments in the schema below (about
+// not re-using/re-purposing numbers). This is only a TEMPORARY caveat whilst
+// the V1 design is put in place. When we know what the MbedOS drivers are
+// providing for the initial firmware the schema version will be fixed and
+// we will then adhere to the "only add new" items to this schema preserve the
+// backwards compatible and future-proofed aims of the schema. So until code is
+// providing actual data over Pelion to 3rd-parties we can break the "do not
+// change" rule.
+
+//=============================================================================
+
+syntax = "proto3";
+
+//-----------------------------------------------------------------------------
+
+// If the schema is designed correctly to be future-proof then we should *NEVER*
+// need to change the schema version number; since we can just extend the
+// FieldKey key space with new scalar/complex types in the Field oneof as
+// needed. De-serialising systems just need to ignore fields with FieldKey
+// values that they do not know.
+//
+// However, just in case we do need to redesign the initial parent message
+// format, we maintain a version number space:
+enum SchemaVersion {
+  INVALID = 0; // never used since is default value (for not provided)
+  SMARTPLUG_V1 = 1; // initial schema version number for device messages
+}
+
+//-----------------------------------------------------------------------------
+// Power Measurements
+
+message Power {
+  // The measured voltage, current and power delivered by the plug.
+
+  uint32 voltage = 1; // voltage measurment
+  uint32 current = 2; // current measurment
+  uint32 power = 3; // power measurment
+  uint64 timestamp = 4; // Timestamp seconds.
+}
+
+//-----------------------------------------------------------------------------
+
+// *CRITICAL*: The ordering and interpretation of individual key values in the
+// following FieldKey enum should *NEVER* change. If functionality is
+// deprecated the defined keys should not be reused. New functionality
+// (extensions) should append to the number space only:
+enum FieldKey {
+  UNUSED = 0; // normal enum default value
+
+
+  FW_INFORMATION = 1; // bytes  : human-readable NUL terminated diagnostic strs
+
+  // It is expected that data values forwarded via this message schema, where
+  // appropriate, are provided as standard SI units.
+  //
+  // It is expected that the underlying run-time device drivers will process the
+  // raw data from individual sensors into a standard representation for
+  // forwarding.
+
+  POWER  = 2;  // Power
+}
+
+//-----------------------------------------------------------------------------
+
+// A basic field data item. NOTE: This approach avoids the issue of the message
+// generator not serializing values that match the default for the given
+// underlying scalar type; since we will never use the UNUSED enum key for real
+// fields:
+message Field {
+  // The key defines which of the oneof "value" encodings is interpreted:
+  FieldKey key = 1;
+
+  oneof value {
+    // scalar
+    bool v_bool = 2;
+    int32 v_int32 = 3;
+    uint32 v_uint32 = 4;
+    sint32 v_sint32 = 5;
+    fixed32 v_fixed32 = 6;
+    sfixed32 v_sfixed32 = 7;
+    int64 v_int64 = 8;
+    uint64 v_uint64 = 9;
+    sint64 v_sint64 = 10;
+    fixed64 v_fixed64 = 11;
+    sfixed64 v_sfixed64 = 12;
+    double v_double = 13;
+    float v_float = 14;
+    string v_string = 15;
+    bytes v_bytes = 16;
+    // complex
+    Power v_power = 17;
+
+    // New complex fields can be added as required but we should *NEVER*
+    // renumber/reuse any assigned numbers where that field has been
+    // deprecated.
+  }
+}
+
+//-----------------------------------------------------------------------------
+
+// DECIDE: We intend the UUID to be optional (and probably never needed in a
+// Pelion world). This is an initial simple NUL-terminated string allowing for
+// human-readable or fixed format UUIDs (e.g. 64-digit hex) to be used. Maybe it
+// should be a binary bytes vector with an associated format identifier.
+
+message UUID {
+  string devId = 1;
+}
+
+//-----------------------------------------------------------------------------
+
+// Top-level message:
+message SmartPlug {
+  // The "timestamp" is a monotonically increasing UTC millisecond timestamp:
+  uint64 timestamp = 1;
+
+  // We treat the "version" field as OPTIONAL and the data generator will
+  // normally only populate this field at the start-of-day. As such it can be
+  // used by the backend as an indication that a client device has been rebooted
+  // (for whatever reason). It allows the backend to track device restarts
+  // without explicitly having to add a new field to provide that
+  // information. After start-of-day all subsequent messages transmitted should
+  // NOT fill the "version" field, thus minimising the size of the transmitted
+  // binary and still allowing the backend to be notified of changes in
+  // "version" if a client device is upgraded in the field (and hence will
+  // restart and transmit the new "version" value in its first upload). There is
+  // no point in continually transmitting a piece of "static" information for a
+  // specific firmware build.
+  SchemaVersion version = 2;
+
+  // We provide support for an optional unique identifier to be carried in the
+  // data so we can uniquely identify the source device. This can be a
+  // per-device H/W specific value or something programmed into the flash of a
+  // device during onboarding. It is *NOT* strictly necessary when using a
+  // point-to-point system like Pelion where the connection already defines the
+  // identity of the device. The field is just provided here as an option if we
+  // want/need it.
+  UUID identity = 3;
+
+  // We have a "vector" of fields to work around the receiver discerning
+  // provided data against default values:
+  repeated Field fields = 4;
+
+  // A monotonically increasing sequence number. The default value of 0
+  // indicates no sequence#, with valid sequences starting from 1. This optional
+  // field is provided since it may be possible for a device that has not been
+  // able to obtain network time to have an "uninitialised" timestamp field;
+  // which would be indicated by timestamps being reported as the epoch or
+  // shortly thereafter. To allow the backend data processing to correctly
+  // interleave messages received with an invalid timestamp we provide the
+  // ability for the firmware to provide a sequence number identifying the
+  // message order. The use of a 64-bit numberspace obviates the requirement to
+  // cope with the sequence# overflowing.
+  uint64 sequence = 5;
+}
+
+//=============================================================================
+// EOF smart_plug.proto
